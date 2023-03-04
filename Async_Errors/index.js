@@ -1,85 +1,104 @@
 const express = require('express');
 const app = express();
-const morgan = require('morgan');
-
+const path = require('path');
+const mongoose = require('mongoose');
+const methodOverride = require('method-override');
 const AppError = require('./AppError');
 
-app.use(morgan('tiny'));
-app.use((req, res, next) => {
-    req.requestTime = Date.now();
-    console.log(req.method, req.path);
-    next();
-})
+const Product = require('./models/product');
 
-app.use('/dogs', (req, res, next) => {
-    console.log("I LOVE DOGS!!!")
-    next();
-})
+mongoose.set('strictQuery', true);
+mongoose.connect('mongodb://127.0.0.1:27017/farmStand2')
+    .then(() => {
+        console.log('Mongo Connection Open!')
+    })
+    .catch(err => {
+        console.log('Oh no Mongo Connection Error!')
+        console.log(err)
+    })
 
-const verifyPassword = (req, res, next) => {
-    const { password } = req.query;
-    if (password === 'chickennugget') {
-        next();
+
+app.set('views', path.join(__dirname, 'views'));
+app.set('view engine', 'ejs');
+
+app.use(express.urlencoded({ extended: true }));
+app.use(methodOverride('_method'));
+
+const categories = ['fruit', 'vegetable', 'dairy'];
+
+app.get('/products', wrapAsync(async (req, res, next) => {
+    const { category } = req.query;
+    if (category) {
+        const products = await Product.find({ category })
+        res.render('products/index', { products, category })
+    } else {
+        const products = await Product.find({})
+        res.render('products/index', { products, category: 'All' })
     }
-    throw new AppError('password required', 401);
-    // res.send('SORRY YOU NEED A PASSWORD!!!')
-    // throw new AppError(401, 'Password required!')
+}))
+
+app.get('/products/new', (req, res) => {
+    res.render('products/new', { categories })
+})
+
+app.post('/products', wrapAsync(async (req, res, next) => {
+    const newProduct = new Product(req.body);
+    await newProduct.save();
+    res.redirect(`/products/${newProduct._id}`);
+}))
+
+function wrapAsync(fn) {
+    return function (req, res, next) {
+        fn(req, res, next).catch(e => next(e))
+    }
 }
 
-// app.use((req, res, next) => {
-//     console.log("THIS IS MY FIRST MIDDLEWARE")
-//     return next();
-//     console.log("THIS IS MY FIRST MIDDLEWARE - AFTER CALLING NEXT()")
-// })
-// app.use((req, res, next) => {
-//     console.log("THIS IS MY SECOND MIDDLEWARE")
-//     return next();
-// })
-// app.use((req, res, next) => {
-//     console.log("THIS IS MY THIRD MIDDLEWARE")
-//     return next();
-// })
+app.get('/products/:id', wrapAsync(async (req, res, next) => {
+    const { id } = req.params;
+    const product = await Product.findById(id)
+    if (!product) {
+        throw new AppError('Product Not Found', 404);
+    }
+    res.render('products/show', { product })
+}))
 
-app.get('/', (req, res) => {
-    console.log(`REQUEST DATE: ${req.requestTime}`)
-    res.send('HOME PAGE!')
+app.get('/products/:id/edit', wrapAsync(async (req, res, next) => {
+    const { id } = req.params;
+    const product = await Product.findById(id)
+    if (!product) {
+        throw new AppError('Product Not Found', 404);
+    }
+    res.render('products/edit', { product, categories })
+}))
+
+app.put('/products/:id', wrapAsync(async (req, res, next) => {
+    const { id } = req.params;
+    const product = await Product.findByIdAndUpdate(id, req.body, { runValidators: true, new: true });
+    res.redirect(`/products/${product._id}`);
+}))
+
+app.delete('/products/:id', async (req, res) => {
+    const { id } = req.params;
+    const deletedProduct = await Product.findByIdAndDelete(id);
+    res.redirect('/products');
 })
 
-app.get('/error', (req, res) => {
-    chicken.fly();
-})
-
-app.get('/dogs', (req, res) => {
-    console.log(`REQUEST DATE: ${req.requestTime}`)
-    res.send('WOOF WOOF!')
-})
-
-app.get('/secret', verifyPassword, (req, res) => {
-    res.send('MY SECRET IS: Sometimes I wear headphones in public so I dont have to talk to anyone!')
-})
-
-app.get('/admin', (req, res) => {
-    throw new AppError('You are not an Admin!', 403)
-})
-
-app.use((req, res) => {
-    res.status(404).send('NOT FOUND!')
-})
-
-// app.use((err, req, res, next) => {
-//     console.log("********************************")
-//     console.log("**************ERROR*************")
-//     console.log("********************************")
-//     console.log(err)
-//     next(err)
-// })
+const handleValidationErr = err => {
+    console.dir(err);
+    return new AppError(`Validation Failed...${err.message}`, 400)
+}
 
 app.use((err, req, res, next) => {
-    const { status = 500, message = 'Something Went Wrong' } = err;
+    console.log(err.name);
+    if (err.name === 'ValidationError') err = handleValidationErr(err)
+    next(err);
+})
+
+app.use((err, req, res, next) => {
+    const { status = 500, message = 'Something went wrong' } = err;
     res.status(status).send(message);
 })
 
-
 app.listen(3000, () => {
-    console.log('App is running on localhost:3000')
+    console.log("APP IS LISTENING ON PORT 3000!")
 })
